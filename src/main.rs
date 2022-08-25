@@ -286,7 +286,7 @@ impl ServerListCfg {
         for addr in &args.http_servers {
             cli_servers.push(Arc::new(ProxyServer::new(
                 addr.clone(),
-                ProxyProto::http(false, None),
+                ProxyProto::http(false, None, None),
                 default_test_dns,
                 default_max_wait,
                 None,
@@ -307,7 +307,7 @@ impl ServerListCfg {
     }
 
     #[instrument(skip_all)]
-    fn load(&self) -> Result<Vec<Arc<ProxyServer>>, &'static str> {
+    fn load(&self) -> Result<Vec<Arc<ProxyServer>>, String> {
         let mut servers = self.cli_servers.clone();
         if let Some(path) = &self.path {
             let ini = Ini::load_from_file(path).or(Err("cannot read server list file"))?;
@@ -366,9 +366,11 @@ impl ServerListCfg {
                         let password = props.get("socks password").unwrap_or("");
                         match (username.len(), password.len()) {
                             (0, 0) => ProxyProto::socks5(fake_hs),
-                            (0, _) | (_, 0) => return Err("socks username/password is empty"),
+                            (0, _) | (_, 0) => {
+                                return Err("socks username/password is empty".to_string())
+                            }
                             (u, p) if u > 255 || p > 255 => {
-                                return Err("socks username/password too long")
+                                return Err("socks username/password too long".to_string())
                             }
                             _ => ProxyProto::socks5_with_auth(UserPassAuthCredential::new(
                                 username, password,
@@ -385,16 +387,48 @@ impl ServerListCfg {
                             match (props.get("http username"), props.get("http password")) {
                                 (None, None) => None,
                                 (Some(user), _) if user.contains(':') => {
-                                    return Err("semicolon (:) in http username")
+                                    return Err("semicolon (:) in http username".to_string())
                                 }
                                 (user, pass) => Some(UserPassAuthCredential::new(
                                     user.unwrap_or(""),
                                     pass.unwrap_or(""),
                                 )),
                             };
-                        ProxyProto::http(cwp, credential)
+
+                        let headers = props
+                            .get_all("http header")
+                            .enumerate()
+                            .map(|(i, x)| {
+                                let (name, value) = x.split_once(' ').ok_or(format!(
+                                    "expected format `HEADER_NAME HEADER_VALUE` for http header {}",
+                                    i + 1
+                                ))?;
+
+                                let name =
+                                    hyper::header::HeaderName::from_str(name).map_err(|e| {
+                                        format!(
+                                            "invalid header name for http header {}: {:?}",
+                                            i + 1,
+                                            e
+                                        )
+                                    })?;
+
+                                let value =
+                                    hyper::header::HeaderValue::from_str(value).map_err(|e| {
+                                        format!(
+                                            "invalid header value for http header {}: {:?}",
+                                            i + 1,
+                                            e
+                                        )
+                                    })?;
+
+                                Ok((name, value))
+                            })
+                            .collect::<Result<Vec<_>, String>>()?;
+
+                        ProxyProto::http(cwp, credential, Some(headers))
                     }
-                    _ => return Err("unknown proxy protocol"),
+                    _ => return Err("unknown proxy protocol".to_string()),
                 };
                 let server =
                     ProxyServer::new(addr, proto, test_dns, max_wait, listen_ports, tag, base);
@@ -402,7 +436,7 @@ impl ServerListCfg {
             }
         }
         if servers.is_empty() {
-            return Err("missing server list");
+            return Err("missing server list".to_string());
         }
         info!("total {} server(s) loaded", servers.len());
         Ok(servers)

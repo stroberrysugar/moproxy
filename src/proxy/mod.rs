@@ -45,6 +45,8 @@ pub enum ProxyProto {
         /// cause some existing implementations to reject the request.
         connect_with_payload: bool,
         user_pass_auth: Option<UserPassAuthCredential>,
+        #[serde(skip_serializing)]
+        headers: Option<Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>>,
     },
     Direct,
 }
@@ -360,10 +362,15 @@ impl ProxyProto {
         }
     }
 
-    pub fn http(connect_with_payload: bool, credential: Option<UserPassAuthCredential>) -> Self {
+    pub fn http(
+        connect_with_payload: bool,
+        credential: Option<UserPassAuthCredential>,
+        headers: Option<Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>>,
+    ) -> Self {
         ProxyProto::Http {
             connect_with_payload,
             user_pass_auth: credential,
+            headers,
         }
     }
 }
@@ -461,6 +468,7 @@ impl ProxyServer {
             ProxyProto::Http {
                 connect_with_payload,
                 user_pass_auth,
+                headers,
             } => {
                 http::handshake(
                     &mut stream,
@@ -468,6 +476,7 @@ impl ProxyServer {
                     data,
                     *connect_with_payload,
                     user_pass_auth,
+                    headers.clone(),
                 )
                 .await?
             }
@@ -631,7 +640,7 @@ impl FromStr for ProxyProto {
             // default to disable fake handshaking
             "socks5" | "socksv5" => Ok(ProxyProto::socks5(false)),
             // default to disable connect with payload
-            "http" => Ok(ProxyProto::http(false, None)),
+            "http" => Ok(ProxyProto::http(false, None, None)),
             _ => Err(()),
         }
     }

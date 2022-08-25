@@ -31,11 +31,12 @@ pub async fn handshake<T>(
     data: Option<T>,
     with_playload: bool,
     user_pass_auth: &Option<UserPassAuthCredential>,
+    headers: Option<Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>>,
 ) -> io::Result<()>
 where
     T: AsRef<[u8]> + 'static,
 {
-    let mut buf = build_request(addr, user_pass_auth).into_bytes();
+    let mut buf = build_request(addr, user_pass_auth, headers).into_bytes();
     stream.write_all(&buf).await?;
 
     if with_playload {
@@ -94,7 +95,11 @@ where
     Ok(())
 }
 
-fn build_request(addr: &Destination, user_pass_auth: &Option<UserPassAuthCredential>) -> String {
+fn build_request(
+    addr: &Destination,
+    user_pass_auth: &Option<UserPassAuthCredential>,
+    headers: Option<Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>>,
+) -> String {
     let port = addr.port;
     let host = match addr.host {
         Address::Ip(ip) => match ip {
@@ -111,13 +116,21 @@ fn build_request(addr: &Destination, user_pass_auth: &Option<UserPassAuthCredent
             password = user_pass_auth.password
         );
         let basic_auth = base64::encode(&auth);
-        format!(
+
+        let mut headers_string = format!(
             "CONNECT {host} HTTP/1.1\r\n\
              Host: {host}\r\n\
-             Proxy-Authorization: Basic {basic_auth}\r\n\r\n",
+             Proxy-Authorization: Basic {basic_auth}\r\n",
             host = host,
             basic_auth = basic_auth,
-        )
+        );
+
+        for (name, value) in headers.unwrap_or(vec![]) {
+            headers_string.push_str(&format!("{}: {}\r\n", name, value.to_str().unwrap()));
+        }
+
+        headers_string.push_str("\r\n");
+        headers_string
     } else {
         format!(
             "CONNECT {host} HTTP/1.1\r\n\
